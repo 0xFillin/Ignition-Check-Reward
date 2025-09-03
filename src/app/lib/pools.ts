@@ -42,7 +42,9 @@ export async function fetchPoolsData() {
                 contractsToCall.push({ address: item.address, abi: uniswapV2PairAbi, functionName: 'getReserves' });
             }
         } else if (item.category === 'Lending') {
-            contractsToCall.push({ address: item.asset, abi: erc20Abi, functionName: 'balanceOf', args: [item.address] });
+                if ('asset' in item && item.asset) {
+                    contractsToCall.push({ address: item.asset, abi: erc20Abi, functionName: 'balanceOf', args: [item.address] });
+                }
         }
     });
     
@@ -136,8 +138,10 @@ export async function fetchPoolsData() {
                 tvl = (amount0 * (prices.get(token0) || 0)) + (amount1 * (prices.get(token1) || 0));
             }
         } else if (itemConf.category === 'Lending') {
-            const amount = parseFloat(formatUnits(data.balance, decimalsMap.get(itemConf.asset)!));
-            tvl = amount * (prices.get(itemConf.asset) || 0);
+            if ('asset' in itemConf && itemConf.asset) {
+                const amount = parseFloat(formatUnits(data.balance, decimalsMap.get(itemConf.asset)!));
+                tvl = amount * (prices.get(itemConf.asset) || 0);
+            }
         }
         
         const rewardString = rewardsData[itemConf.id] || "0";
