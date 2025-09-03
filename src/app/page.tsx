@@ -1,103 +1,390 @@
+'use client';
+
 import Image from "next/image";
+import { useState, useEffect, useCallback, useMemo } from "react";
+
+import * as RadixDialog from '@radix-ui/react-dialog';
+
+import { ChevronsUpDown, ChevronUp, ChevronDown, X, ChartBar } from 'lucide-react';
+
+import { fetchPoolsData } from "./lib/pools";
+import { LINEA_TOTAL_SUPPLY } from "./lib/constants";
+import { Address } from "viem";
+
+type FetchedItemData = Awaited<ReturnType<typeof fetchPoolsData>>[0];
+type ItemData = FetchedItemData & { underlyingAsset?: Address };
+interface CachedData {
+  timestamp: number;
+  data: ItemData[];
+}
+const CACHE_KEY = 'lineaMarketsCache';
+const TEN_MINUTES_MS = 10 * 60 * 1000;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+const Placeholder = () => <span style={{ color: "var(--text-muted)" }}>—</span>;
+const LoadingSpinner = () => <div className="spinner" />;
+
+type SortConfig = {
+  key: keyof CalculableItem | null;
+  direction: 'asc' | 'desc' | null;
+};
+type CalculableItem = ItemData & {
+  apr: number;
+  userWeeklyRewards: number;
+  userWeeklyProfit: number;
+};
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [items, setItems] = useState<ItemData[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [lineaPrice, setLineaPrice] = useState<string>('');
+  const [globalDeposit, setGlobalDeposit] = useState<string>('');
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: null });
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalAllMarkets, setModalAllMarkets] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<CalculableItem | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const loadItems = useCallback(async (isBackgroundRefresh = false) => {
+    if (!isBackgroundRefresh) setIsLoading(true);
+    try {
+      const data = await fetchPoolsData();
+      setItems(data as ItemData[]);
+      const cache: CachedData = { timestamp: Date.now(), data: data as ItemData[] };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch (error) {
+      console.error("Не удалось загрузить данные:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const checkCacheAndFetch = () => {
+      const cachedItem = localStorage.getItem(CACHE_KEY);
+      if (cachedItem) {
+        try {
+          const cache: CachedData = JSON.parse(cachedItem);
+          const age = Date.now() - cache.timestamp;
+
+          if (age > ONE_HOUR_MS) {
+            loadItems();
+            return;
+          }
+
+          setItems(cache.data);
+          setIsLoading(false);
+
+          if (age > TEN_MINUTES_MS) {
+            loadItems(true);
+          }
+        } catch (error) {
+          loadItems();
+        }
+      } else {
+        loadItems();
+      }
+    };
+
+    checkCacheAndFetch();
+    const intervalId = setInterval(checkCacheAndFetch, TEN_MINUTES_MS);
+    return () => clearInterval(intervalId);
+  }, [loadItems]);
+
+  const handleSort = (key: keyof CalculableItem) => {
+    let direction: 'asc' | 'desc' | null = 'desc';
+
+    if (sortConfig.key === key) {
+      if (sortConfig.direction === 'desc') {
+        direction = 'asc';
+      } else if (sortConfig.direction === 'asc') {
+        direction = null;
+      }
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const calculableItems = useMemo(() => {
+    return (items || []).map(item => {
+      const tvl = item.tvlRaw || 0;
+      const weeklyReward = item.rewardLastWeekRaw || 0;
+      const apr = (tvl > 0 && weeklyReward > 0) ? (weeklyReward / tvl) * 52 * 100 : 0;
+
+      const depositValue = parseFloat(globalDeposit) || 0;
+      const userWeeklyRewards = (tvl > 0 && depositValue > 0) ? (depositValue / tvl) * weeklyReward : 0;
+      const priceOfLinea = parseFloat(lineaPrice) || 0;
+      const userWeeklyProfit = userWeeklyRewards * priceOfLinea;
+
+      return { ...item, apr, userWeeklyRewards, userWeeklyProfit };
+    });
+  }, [items, globalDeposit, lineaPrice]);
+
+  const sortedItems = useMemo(() => {
+    if (!calculableItems || calculableItems.length === 0) return [];
+    if (sortConfig.key === null || sortConfig.direction === null) return calculableItems;
+
+    return [...calculableItems].sort((a, b) => {
+      const aValue = a[sortConfig.key!];
+      const bValue = b[sortConfig.key!];
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [calculableItems, sortConfig]);
+
+  const headers = [
+    { key: 'name', label: 'Market', sortable: false },
+    { key: 'type', label: 'Type', sortable: false },
+    { key: 'tvlRaw', label: 'TVL', sortable: true },
+    { key: 'rewardLastWeekRaw', label: 'Reward Last Week', sortable: true }, 
+    { key: 'userWeeklyRewards', label: 'Your Rewards', sortable: true },
+    { key: 'userWeeklyProfit', label: 'Your Profit', sortable: true },
+  ];
+
+  const generateMarketUrl = (item: ItemData) => {
+    if ('protocol' in item && item.protocol === 'AAVE') {
+      if (item.underlyingAsset) {
+        return `https://app.aave.com/reserve-overview/?underlyingAsset=${item.underlyingAsset}&marketName=proto_linea_v3`;
+      }
+      return `https://lineascan.build/address/${item.address}`;
+    }
+    if (item.category === 'Liquidity') {
+      return `https://www.etherex.finance/liquidity/${item.address}`;
+    }
+    if (item.category === 'Lending') {
+      return `https://app.euler.finance/vault/${item.address}?network=lineamainnet`;
+    }
+    return '#';
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: keyof CalculableItem }) => {
+    if (sortConfig.key !== columnKey || sortConfig.direction === null) {
+      return <ChevronsUpDown size={14} className="sort-icon" />;
+    }
+    if (sortConfig.direction === 'asc') {
+      return <ChevronUp size={14} className="sort-icon-active" />;
+    }
+    return <ChevronDown size={14} className="sort-icon-active" />;
+  };
+
+  function openModalForItem(item: CalculableItem) {
+    setSelectedItem(item);
+    setModalAllMarkets(false);
+    setIsModalOpen(true);
+  }
+
+  function openModalAllMarkets() {
+    setSelectedItem(null);
+    setModalAllMarkets(true);
+    setIsModalOpen(true);
+  }
+
+  const generateFdvs = (): number[] => {
+    const arr: number[] = [];
+    for (let b = 1; b <= 20; b++) arr.push(b * 1_000_000_000);
+    for (let b = 25; b <= 100; b += 5) arr.push(b * 1_000_000_000);
+    return arr;
+  };
+  const fdvList = generateFdvs();
+
+  return (
+    <main className="min-h-screen page-wrap">
+      <div className="max-w-7xl mx-auto">
+
+        <div className="profit-calculator-wrap">
+          <div className="profit-calculator-card">
+            <div className="pc-header">
+              <div>
+                <h2 className="pc-title">Profit Calculator</h2>
+                <p className="pc-subtitle">Estimate weekly LINEA rewards & USD profit for deposit</p>
+              </div>
+
+              <button className="pc-header-icon" onClick={openModalAllMarkets} title="Open FDV table for all markets" aria-label="Open FDV table for all markets">
+                <ChartBar size={18} />
+              </button>
+            </div>
+
+            <div className="pc-grid">
+              <div className="pc-field">
+                <label htmlFor="global-deposit" className="pc-label">Deposit ($)</label>
+                <input
+                  type="number"
+                  id="global-deposit"
+                  value={globalDeposit}
+                  onChange={(e) => setGlobalDeposit(e.target.value)}
+                  placeholder="e.g., 1000"
+                  className="pc-input"
+                />
+              </div>
+
+              <div className="pc-field">
+                <label htmlFor="linea-price" className="pc-label">Current LINEA Price ($)</label>
+                <input
+                  type="number"
+                  id="linea-price"
+                  value={lineaPrice}
+                  onChange={(e) => setLineaPrice(e.target.value)}
+                  placeholder="e.g., 2.5"
+                  className="pc-input"
+                />
+              </div>
+            </div>
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+
+        <div className="table-wrap">
+          <div className="table-card">
+            <table className="customTable compact" role="table">
+              <thead>
+                <tr>
+                  {headers.map((header) => {
+                    const isSortable = header.sortable;
+                    return (
+                      <th key={header.key}>
+                        {isSortable ? (
+                          <button className="header-button" onClick={() => handleSort(header.key as keyof CalculableItem)}>
+                            <span>{header.label}</span>
+                            <SortIcon columnKey={header.key as keyof CalculableItem} />
+                          </button>
+                        ) : (
+                          <div className="header-cell">{header.label}</div>
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading && items.length === 0 ? (
+                  <tr><td colSpan={headers.length} className="text-center p-6"><LoadingSpinner /></td></tr>
+                ) : sortedItems.map((item) => {
+                  return (
+                    <tr key={item.id}>
+                      <td className="cell-left">
+                        <a href={generateMarketUrl(item)} target="_blank" rel="noopener noreferrer" className="link-style" title={item.name}>
+                          <Image src={item.img} alt={item.name} width={20} height={20} className="rounded-full" />
+                          <span className="market-name" title={item.name}>{item.name}</span>
+                        </a>
+                      </td>
+                      <td><div className="center-cell">{item.type}</div></td>
+                      <td><div className="right-cell num">{item.tvlFormatted}</div></td>
+                      <td>
+                        <div className="right-cell num">
+                          {typeof item.rewardLastWeekRaw === 'number' && item.rewardLastWeekRaw > 0
+                            ? item.rewardLastWeekRaw.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : <Placeholder />}
+                        </div>
+                      </td>
+
+                      <td><div className="right-cell num">{item.userWeeklyRewards > 0 ? item.userWeeklyRewards.toFixed(2) : <Placeholder />}</div></td>
+                      <td>
+                        <div className="profit-cell">
+                          <span className="profit-amount">{item.userWeeklyProfit > 0 ? item.userWeeklyProfit.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '—'}</span>
+                          <button
+                            className="icon-button"
+                            onClick={() => openModalForItem(item)}
+                            aria-label={`Open FDV simulation for ${item.name}`}
+                            title="Open FDV simulation"
+                          >
+                            <ChartBar size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <RadixDialog.Root open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <RadixDialog.Portal>
+          <RadixDialog.Overlay className="rd-overlay" />
+          <RadixDialog.Content className="rd-content">
+            <div className="rd-header">
+              <RadixDialog.Title className="rd-title">
+                {modalAllMarkets ? 'FDV Profit — All Markets' : `FDV Profit — ${selectedItem ? selectedItem.name : ''}`}
+              </RadixDialog.Title>
+              <button className="rd-close" onClick={() => setIsModalOpen(false)} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="rd-body">
+              {modalAllMarkets ? (
+                <div className="fdv-grid-wrapper">
+                  <div
+                    className="fdv-grid"
+                    style={{
+                      gridTemplateColumns: `180px repeat(${sortedItems.length}, 160px)`
+                    }}
+                    role="grid"
+                    aria-label="FDV profit table for all markets"
+                  >
+                    <div className="fdv-header">FDV</div>
+                    {sortedItems.map(m => (
+                      <div key={m.id} className="fdv-header market-col" title={m.name}>{m.name}</div>
+                    ))}
+
+                    {fdvList.map(fdv => {
+                      const fdvLabel = fdv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+                      return (
+                        <FragmentRow key={fdv} fdv={fdv} fdvLabel={fdvLabel} markets={sortedItems} />
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : selectedItem ? (
+                <div className="fdv-grid-wrapper single">
+                  <div className="fdv-grid single" style={{ gridTemplateColumns: `220px 1fr` }}>
+                    <div className="fdv-header">FDV</div>
+                    <div className="fdv-header">Your Profit</div>
+
+                    {fdvList.map(fdv => {
+                      const price = fdv / LINEA_TOTAL_SUPPLY;
+                      const profit = selectedItem.userWeeklyRewards > 0 ? selectedItem.userWeeklyRewards * price : 0;
+                      return (
+                        <FragmentSimpleRow key={fdv} fdv={fdv} profit={profit} />
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div>No data</div>
+              )}
+            </div>
+          </RadixDialog.Content>
+        </RadixDialog.Portal>
+      </RadixDialog.Root>
+    </main>
+  );
+}
+
+function FragmentRow({ fdv, fdvLabel, markets }: { fdv: number; fdvLabel: string; markets: CalculableItem[] }) {
+  return (
+    <>
+      <div className="fdv-cell fdv-left">{fdvLabel}</div>
+      {markets.map(m => {
+        const price = fdv / LINEA_TOTAL_SUPPLY;
+        const profit = m.userWeeklyRewards > 0 ? m.userWeeklyRewards * price : 0;
+        return (
+          <div key={m.id} className="fdv-cell market-cell">
+            {profit > 0 ? profit.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '—'}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function FragmentSimpleRow({ fdv, profit }: { fdv: number; profit: number }) {
+  return (
+    <>
+      <div className="fdv-cell fdv-left">{fdv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</div>
+      <div className="fdv-cell market-cell">
+        {profit > 0 ? profit.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '—'}
+      </div>
+    </>
   );
 }
