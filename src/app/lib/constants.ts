@@ -24,6 +24,8 @@ export const aaveATokenAbi = [
   { name: "UNDERLYING_ASSET_ADDRESS", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
 ] as const;
 
+export const eulerVaultAbi = [{inputs: [], name: "totalSupply", outputs: [{ internalType: "uint256", name: "", type: "uint256" }], stateMutability: "view", type: "function", }, ] as const;
+
 export const TOKENS = {
   REX: "0xEfD81eeC32B9A8222D1842ec3d99c7532C31e348" as Address,
   ETH: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f" as Address, // WETH

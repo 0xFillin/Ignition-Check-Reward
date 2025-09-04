@@ -2,7 +2,8 @@
 
 import { createPublicClient, http, formatUnits, Address, PublicClient } from 'viem';
 import { linea } from 'viem/chains';
-import { allItemsConfig, TOKENS, erc20Abi, uniswapV2PairAbi, aaveATokenAbi, chainlinkPriceFeedAbi, AAVE_ETH_PRICE_FEED_ADDRESS, REWARDS_GIST_URL } from './constants';
+// ++ IMPORT the new ABI
+import { allItemsConfig, TOKENS, erc20Abi, uniswapV2PairAbi, aaveATokenAbi, chainlinkPriceFeedAbi, AAVE_ETH_PRICE_FEED_ADDRESS, REWARDS_GIST_URL, eulerVaultAbi } from './constants';
 
 const publicClient: PublicClient = createPublicClient({
   chain: linea,
@@ -19,6 +20,7 @@ const parseNumberFromString = (value: string | undefined): number => {
 };
 
 export async function fetchPoolsData() {
+    // This part remains the same
     const allUniqueTokens = [...new Set(allItemsConfig.flatMap(item => 'tokens' in item ? item.tokens : ('asset' in item ? [item.asset] : [])))].filter(Boolean);
 
     const contractsToCall: any[] = [
@@ -42,12 +44,13 @@ export async function fetchPoolsData() {
                 contractsToCall.push({ address: item.address, abi: uniswapV2PairAbi, functionName: 'getReserves' });
             }
         } else if (item.category === 'Lending') {
-                if ('asset' in item && item.asset) {
-                    contractsToCall.push({ address: item.asset, abi: erc20Abi, functionName: 'balanceOf', args: [item.address] });
-                }
+            // ** CHANGED LOGIC FOR EULER VAULTS **
+            // Instead of checking the balance of the underlying asset, we call totalSupply on the vault contract itself.
+            contractsToCall.push({ address: item.address, abi: eulerVaultAbi, functionName: 'totalSupply' });
         }
     });
     
+    // This part remains the same
     const multicallPromise = publicClient.multicall({ contracts: contractsToCall, allowFailure: false });
     
     const rewardsPromise = fetch(REWARDS_GIST_URL)
@@ -95,10 +98,12 @@ export async function fetchPoolsData() {
                 });
             }
         } else if (item.category === 'Lending') {
-            itemRawData.set(item.id, { balance: multicallResults[resultIndex++] as bigint });
+            // ** CHANGED: store totalSupply instead of balance **
+            itemRawData.set(item.id, { totalSupply: multicallResults[resultIndex++] as bigint });
         }
     });
 
+    // Price calculation logic remains the same
     const prices = new Map<Address, number>();
     prices.set(TOKENS.USDC, 1);
     prices.set(TOKENS.USDT, 1);
@@ -138,8 +143,9 @@ export async function fetchPoolsData() {
                 tvl = (amount0 * (prices.get(token0) || 0)) + (amount1 * (prices.get(token1) || 0));
             }
         } else if (itemConf.category === 'Lending') {
+            // ** CHANGED: Use totalSupply and format it with underlying asset's decimals **
             if ('asset' in itemConf && itemConf.asset) {
-                const amount = parseFloat(formatUnits(data.balance, decimalsMap.get(itemConf.asset)!));
+                const amount = parseFloat(formatUnits(data.totalSupply, decimalsMap.get(itemConf.asset)!));
                 tvl = amount * (prices.get(itemConf.asset) || 0);
             }
         }
