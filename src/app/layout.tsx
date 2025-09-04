@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Linea Ignition Check",
+  title: "Linea Ignition Calculation",
 };
 
 export default function RootLayout({
